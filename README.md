@@ -46,7 +46,10 @@ Ou manualmente:
 Obs: a biblioteca face_recognition exige o cmake e o dlib. No Windows, o ideal é usar Python 3.8 ou 3.9 para facilitar a instalação.
 
 3. Execute o programa
+
 ![image](https://github.com/user-attachments/assets/f1e1e0a2-15bc-42a3-a70f-4c4bf335113d)
+
+
 
 💾 Cadastro de Pessoas
 Clique em "Cadastrar Pessoa"
