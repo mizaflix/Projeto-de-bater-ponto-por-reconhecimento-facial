@@ -163,6 +163,27 @@ class FaceApp:
                         if resultado[0]:
                             self.lbl_status.config(text=f"✅ {nome_pessoa} reconhecido! Ponto registrado.")
                             verificado = True
+                            
+                            # Registra no arquivo CSV
+                            from datetime import datetime
+                            import csv
+
+                            agora = datetime.now()
+                            data_str = agora.strftime("%Y-%m-%d")
+                            hora_str = agora.strftime("%H:%M:%S")
+
+                            registro_path = "registro_ponto.csv"
+                            cabecalho = ["Nome", "Data", "Hora"]
+
+                            # Verifica se o arquivo já existe
+                            existe = os.path.exists(registro_path)
+
+                            with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
+                                writer = csv.writer(file)
+                                if not existe:
+                                    writer.writerow(cabecalho)
+                                writer.writerow([nome_pessoa, data_str, hora_str])
+
                             break
 
                     if not encontrou:
