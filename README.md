@@ -97,12 +97,6 @@ Para maior precisão, recomenda-se rostos bem iluminados e centralizados.
 Pode ser expandido para registrar horários em arquivos .csv.
 
 ✨ Possíveis melhorias
-Registro de data e hora do ponto
-
-Geração de relatórios
-
-Integração com banco de dados
-
 Versão executável (.exe)
 
 Versão web ou Android
