@@ -1,0 +1,10 @@
+@echo off
+echo Gerando executável com PyInstaller...
+
+pyinstaller --onefile --noconsole ^
+--add-data "shape_predictor_68_face_landmarks.dat;." ^
+--add-data "res10_300x300_ssd_iter_140000.caffemodel;." ^
+--add-data "deploy.prototxt;." ^
+main.py
+
+pause
