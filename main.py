@@ -1,10 +1,25 @@
 import cv2
+import dlib
 import os
 import face_recognition
 import tkinter as tk
 from tkinter import messagebox
 import threading
 import glob
+import sys
+
+# Detecta se estamos dentro do executável (.exe) ou no código
+if getattr(sys, 'frozen', False):
+    BASE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = os.path.dirname(__file__)
+
+# Caminho real do shape_predictor
+landmark_path = os.path.join(BASE_DIR, "shape_predictor_68_face_landmarks.dat")
+
+# Forçar o carregamento manual do predictor
+face_recognition.api.pose_predictor_68_point = dlib.shape_predictor(landmark_path)
+
 
 class FaceApp:
     def __init__(self, root):
