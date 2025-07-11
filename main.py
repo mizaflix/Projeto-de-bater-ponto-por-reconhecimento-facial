@@ -7,6 +7,7 @@ from tkinter import messagebox
 import threading
 import glob
 import sys
+import time
 class FaceApp:
     def __init__(self, root):
         self.root = root
@@ -94,6 +95,8 @@ class FaceApp:
 
     def rodar_reconhecimento(self):
         try:
+            self.encerrar_janela = False  # Sinalizador
+
             net = cv2.dnn.readNetFromCaffe(
                 "deploy.prototxt",
                 "res10_300x300_ssd_iter_140000.caffemodel"
@@ -109,9 +112,22 @@ class FaceApp:
             in_height = 300
             mean = [104, 117, 123]
             conf_threshold = 0.7
-            salvou = False
-            verificado = False
             win_name = "Reconhecimento Facial"
+
+            # Carregar rostos cadastrados
+            pasta_pessoas = "pessoas_cadastradas"
+            conhecidos = []
+            nomes_conhecidos = []
+
+            for caminho_imagem in glob.glob(os.path.join(pasta_pessoas, "*.jpg")):
+                imagem = face_recognition.load_image_file(caminho_imagem)
+                encs = face_recognition.face_encodings(imagem)
+                if encs:
+                    conhecidos.append(encs[0])
+                    nomes_conhecidos.append(os.path.splitext(os.path.basename(caminho_imagem))[0])
+
+            # Lista de nomes já registrados na sessão
+            ja_registrados = []
 
             while True:
                 has_frame, frame = source.read()
@@ -120,11 +136,13 @@ class FaceApp:
 
                 frame = cv2.flip(frame, 1)
                 frame_height, frame_width = frame.shape[:2]
+
+                # Detectar rostos
                 blob = cv2.dnn.blobFromImage(frame, 1.0, (in_width, in_height), mean, swapRB=False, crop=False)
                 net.setInput(blob)
                 detections = net.forward()
-                faces = []
 
+                face_locations = []
                 for i in range(detections.shape[2]):
                     confidence = detections[0, 0, i, 2]
                     if confidence > conf_threshold:
@@ -132,83 +150,64 @@ class FaceApp:
                         y1 = int(detections[0, 0, i, 4] * frame_height)
                         x2 = int(detections[0, 0, i, 5] * frame_width)
                         y2 = int(detections[0, 0, i, 6] * frame_height)
+                        face_locations.append((y1, x2, y2, x1))  # (top, right, bottom, left)
 
-                        x1, y1 = max(0, x1), max(0, y1)
-                        x2, y2 = min(frame_width - 1, x2), min(frame_height - 1, y2)
+                if face_locations:
+                    encodings = face_recognition.face_encodings(frame, face_locations)
 
-                        if x2 > x1 and y2 > y1:
-                            faces.append((x1, y1, x2, y2))
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                if faces and not salvou:
-                    def face_area(face): return (face[2] - face[0]) * (face[3] - face[1])
-                    x1, y1, x2, y2 = max(faces, key=face_area)
-                    margem = 60
-                    top = max(0, y1 - margem)
-                    bottom = min(frame.shape[0], y2 + margem)
-                    left = max(0, x1 - margem)
-                    right = min(frame.shape[1], x2 + margem)
-                    face_crop = frame[top:bottom, left:right]
-
-
-                    if face_crop.size > 0:
-                        face_crop_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-                        enc_entrada = face_recognition.face_encodings(face_crop_rgb)
-                        if len(enc_entrada) > 0:
-                            encoding_entrada = enc_entrada[0]
-                            salvou = True
-
-                if salvou and not verificado:
-                    pasta_pessoas = "pessoas_cadastradas"
-                    encontrou = False
-
-                    for caminho_imagem in glob.glob(os.path.join(pasta_pessoas, "*.jpg")):
-                        nome_arquivo = os.path.basename(caminho_imagem)
-                        nome_pessoa = os.path.splitext(nome_arquivo)[0]
-
-                        imagem_cadastrada = face_recognition.load_image_file(caminho_imagem)
-                        enc_cadastrado = face_recognition.face_encodings(imagem_cadastrada)
-
-                        if not enc_cadastrado:
+                    for (top, right, bottom, left), encoding in zip(face_locations, encodings):
+                        distancias = face_recognition.face_distance(conhecidos, encoding)
+                        if len(distancias) == 0:
                             continue
 
-                        encoding_cadastrado = enc_cadastrado[0]
-                        distancia = face_recognition.face_distance([encoding_cadastrado], encoding_entrada)[0]
-                        print(f"[DEBUG] Comparando com {nome_pessoa} | Distância: {distancia:.4f}")
+                        menor_dist = min(distancias)
+                        indice = distancias.tolist().index(menor_dist)
 
-                    if distancia <= 0.5:
-                        self.lbl_status.config(text=f"✅ {nome_pessoa} reconhecido! Ponto registrado. Distância: {distancia:.4f}")
-                            
-                        # Salvar no relatório
-                        from datetime import datetime
-                        import csv
+                        if menor_dist <= 0.5:
+                            nome = nomes_conhecidos[indice]
 
-                        agora = datetime.now()
-                        data_str = agora.strftime("%Y-%m-%d")
-                        hora_str = agora.strftime("%H:%M:%S")
+                            if nome not in ja_registrados:
+                                ja_registrados.append(nome)
 
-                        registro_path = "registro_ponto.csv"
-                        cabecalho = ["Nome", "Data", "Hora"]
-                        existe = os.path.exists(registro_path)
-                        with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
-                            writer = csv.writer(file)
-                            if not existe:
-                                writer.writerow(cabecalho)
-                            writer.writerow([nome_pessoa, data_str, hora_str])
+                                from datetime import datetime
+                                import csv
 
-                        verificado = True
-                        break  # já reconheceu, pode parar
+                                agora = datetime.now()
+                                data_str = agora.strftime("%Y-%m-%d")
+                                hora_str = agora.strftime("%H:%M:%S")
 
-                    if not encontrou:
-                        self.lbl_status.config(text="❌ Pessoa não reconhecida.")
-                        verificado = True
+                                registro_path = "registro_ponto.csv"
+                                cabecalho = ["Nome", "Data", "Hora"]
+                                existe = os.path.exists(registro_path)
+
+                                with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
+                                    writer = csv.writer(file)
+                                    if not existe:
+                                        writer.writerow(cabecalho)
+                                    writer.writerow([nome, data_str, hora_str])
+
+                                self.lbl_status.config(text=f"✅ {nome} reconhecido! Ponto registrado.")
+                                self.encerrar_janela = True  # <-- Agora sim! Fecha depois
+                                break
+
+                        else:
+                            nome = "Desconhecido"
+
+                        # Desenha
+                        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                        cv2.putText(frame, nome, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
                 cv2.imshow(win_name, frame)
+
+                # Saída automática
+                if self.encerrar_janela:
+                    cv2.waitKey(2000)  # Dá tempo de mostrar o texto na janela
+                    break
 
                 if cv2.getWindowProperty(win_name, cv2.WND_PROP_VISIBLE) < 1:
                     break
 
-                if cv2.waitKey(1) == 27 or verificado:
+                if cv2.waitKey(1) == 27:
                     break
 
             source.release()
@@ -217,6 +216,7 @@ class FaceApp:
         except Exception as e:
             self.lbl_status.config(text=f"Erro: {e}")
 
+            
 # Criar janela
 root = tk.Tk()
 app = FaceApp(root)
