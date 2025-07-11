@@ -7,20 +7,6 @@ from tkinter import messagebox
 import threading
 import glob
 import sys
-
-# Detecta se estamos dentro do executável (.exe) ou no código
-if getattr(sys, 'frozen', False):
-    BASE_DIR = sys._MEIPASS
-else:
-    BASE_DIR = os.path.dirname(__file__)
-
-# Caminho real do shape_predictor
-landmark_path = os.path.join(BASE_DIR, "shape_predictor_68_face_landmarks.dat")
-
-# Forçar o carregamento manual do predictor
-face_recognition.api.pose_predictor_68_point = dlib.shape_predictor(landmark_path)
-
-
 class FaceApp:
     def __init__(self, root):
         self.root = root
@@ -44,7 +30,7 @@ class FaceApp:
     def cadastrar_pessoa(self):
         def salvar_face(nome):
             cap = cv2.VideoCapture(0)
-            self.lbl_status.config(text="Aguardando câmera... Pressione 's' para salvar ou 'q' para cancelar.")
+            self.lbl_status.config(text="📷 Aguardando captura da webcam...")
 
             while True:
                 ret, frame = cap.read()
@@ -52,26 +38,33 @@ class FaceApp:
                     break
 
                 frame = cv2.flip(frame, 1)
-                cv2.imshow("Cadastro - Pressione 's' para salvar", frame)
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                face_locations = face_recognition.face_locations(rgb_frame)
 
+                for (top, right, bottom, left) in face_locations:
+                    # Adiciona margem
+                    margem = 60
+                    top = max(0, top - margem)
+                    right = min(frame.shape[1], right + margem)
+                    bottom = min(frame.shape[0], bottom + margem)
+                    left = max(0, left - margem)
+
+                    # Retângulo de visualização
+                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+
+                cv2.imshow("Cadastro - Pressione S para salvar | Q para sair", frame)
                 key = cv2.waitKey(1)
-                if key == ord('s'):
-                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    face_locations = face_recognition.face_locations(rgb_frame)
 
-                    if face_locations:
-                        top, right, bottom, left = face_locations[0]
-                        face_image = frame[top:bottom, left:right]
+                if key == ord('s') and face_locations:
+                    top, right, bottom, left = face_locations[0]
+                    face_image = frame[top:bottom, left:right]
 
-                        if not os.path.exists("pessoas_cadastradas"):
-                            os.makedirs("pessoas_cadastradas")
+                    if not os.path.exists("pessoas_cadastradas"):
+                        os.makedirs("pessoas_cadastradas")
 
-                        caminho = os.path.join("pessoas_cadastradas", f"{nome}.jpg")
-                        cv2.imwrite(caminho, face_image)
-                        self.lbl_status.config(text=f"✅ {nome} cadastrado com sucesso!")
-                    else:
-                        self.lbl_status.config(text="❌ Nenhum rosto detectado.")
-
+                    caminho = os.path.join("pessoas_cadastradas", f"{nome}.jpg")
+                    cv2.imwrite(caminho, face_image)
+                    self.lbl_status.config(text=f"✅ {nome} cadastrado com sucesso!")
                     break
 
                 elif key == ord('q'):
@@ -80,6 +73,7 @@ class FaceApp:
 
             cap.release()
             cv2.destroyAllWindows()
+
 
         def pedir_nome():
             nome = entry_nome.get().strip()
@@ -101,7 +95,7 @@ class FaceApp:
     def rodar_reconhecimento(self):
         try:
             net = cv2.dnn.readNetFromCaffe(
-                "opencv-4.x/samples/dnn/face_detector/deploy.prototxt",
+                "deploy.prototxt",
                 "res10_300x300_ssd_iter_140000.caffemodel"
             )
 
@@ -114,7 +108,7 @@ class FaceApp:
             in_width = 300
             in_height = 300
             mean = [104, 117, 123]
-            conf_threshold = 0.85
+            conf_threshold = 0.7
             salvou = False
             verificado = False
             win_name = "Reconhecimento Facial"
@@ -149,7 +143,13 @@ class FaceApp:
                 if faces and not salvou:
                     def face_area(face): return (face[2] - face[0]) * (face[3] - face[1])
                     x1, y1, x2, y2 = max(faces, key=face_area)
-                    face_crop = frame[y1:y2, x1:x2]
+                    margem = 60
+                    top = max(0, y1 - margem)
+                    bottom = min(frame.shape[0], y2 + margem)
+                    left = max(0, x1 - margem)
+                    right = min(frame.shape[1], x2 + margem)
+                    face_crop = frame[top:bottom, left:right]
+
 
                     if face_crop.size > 0:
                         face_crop_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
@@ -173,33 +173,31 @@ class FaceApp:
                             continue
 
                         encoding_cadastrado = enc_cadastrado[0]
-                        resultado = face_recognition.compare_faces([encoding_cadastrado], encoding_entrada)
+                        distancia = face_recognition.face_distance([encoding_cadastrado], encoding_entrada)[0]
+                        print(f"[DEBUG] Comparando com {nome_pessoa} | Distância: {distancia:.4f}")
 
-                        if resultado[0]:
-                            self.lbl_status.config(text=f"✅ {nome_pessoa} reconhecido! Ponto registrado.")
-                            verificado = True
+                    if distancia <= 0.5:
+                        self.lbl_status.config(text=f"✅ {nome_pessoa} reconhecido! Ponto registrado. Distância: {distancia:.4f}")
                             
-                            # Registra no arquivo CSV
-                            from datetime import datetime
-                            import csv
+                        # Salvar no relatório
+                        from datetime import datetime
+                        import csv
 
-                            agora = datetime.now()
-                            data_str = agora.strftime("%Y-%m-%d")
-                            hora_str = agora.strftime("%H:%M:%S")
+                        agora = datetime.now()
+                        data_str = agora.strftime("%Y-%m-%d")
+                        hora_str = agora.strftime("%H:%M:%S")
 
-                            registro_path = "registro_ponto.csv"
-                            cabecalho = ["Nome", "Data", "Hora"]
+                        registro_path = "registro_ponto.csv"
+                        cabecalho = ["Nome", "Data", "Hora"]
+                        existe = os.path.exists(registro_path)
+                        with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
+                            writer = csv.writer(file)
+                            if not existe:
+                                writer.writerow(cabecalho)
+                            writer.writerow([nome_pessoa, data_str, hora_str])
 
-                            # Verifica se o arquivo já existe
-                            existe = os.path.exists(registro_path)
-
-                            with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
-                                writer = csv.writer(file)
-                                if not existe:
-                                    writer.writerow(cabecalho)
-                                writer.writerow([nome_pessoa, data_str, hora_str])
-
-                            break
+                        verificado = True
+                        break  # já reconheceu, pode parar
 
                     if not encontrou:
                         self.lbl_status.config(text="❌ Pessoa não reconhecida.")
