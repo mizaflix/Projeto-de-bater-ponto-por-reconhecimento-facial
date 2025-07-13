@@ -9,6 +9,14 @@ import glob
 import sys
 import time
 class FaceApp:
+    def resource_path(relative_path):
+        """ Get absolute path para o arquivo, independente se rodando do exe ou do script """
+        try:
+            base_path = sys._MEIPASS  # PyInstaller cria essa variável temporária
+        except Exception:
+            base_path = os.path.abspath(".")
+
+        return os.path.join(base_path, relative_path)
     def __init__(self, root):
         self.root = root
         self.root.title("Reconhecimento Facial - Batida de Ponto")
