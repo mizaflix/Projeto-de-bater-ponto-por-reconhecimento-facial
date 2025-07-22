@@ -5,7 +5,7 @@ import face_recognition
 import tkinter as tk
 from tkinter import messagebox
 import threading
-import glob
+import numpy as np
 import sys
 import time
 class FaceApp:
@@ -20,6 +20,11 @@ class FaceApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Reconhecimento Facial - Batida de Ponto")
+
+        self.recognizer = cv2.face.LBPHFaceRecognizer_create()
+        self.label_map = {}
+        self.label_map_invertido = {}
+        self.treinar_modelo()
 
         # Botões
         self.btn_iniciar = tk.Button(root, text="Bater Ponto", command=self.iniciar_thread)
@@ -100,129 +105,107 @@ class FaceApp:
         entry_nome = tk.Entry(cadastro_window)
         entry_nome.pack(pady=5)
         tk.Button(cadastro_window, text="Cadastrar", command=pedir_nome).pack(pady=5)
+    
+    def treinar_modelo(self):
+        imagens = []
+        labels = []
+        pasta = "pessoas_cadastradas"
+
+        if not os.path.exists(pasta):
+            os.makedirs(pasta)
+
+        arquivos = os.listdir(pasta)
+        nomes_unicos = list(set(nome.split("_")[0] for nome in arquivos if nome.endswith(".jpg")))
+
+        for idx, nome in enumerate(nomes_unicos):
+            self.label_map[nome] = idx
+            self.label_map_invertido[idx] = nome
+
+        for arquivo in arquivos:
+            if arquivo.endswith(".jpg"):
+                caminho = os.path.join(pasta, arquivo)
+                img = cv2.imread(caminho, cv2.IMREAD_GRAYSCALE)
+                nome = arquivo.split("_")[0]
+                label = self.label_map[nome]
+                imagens.append(img)
+                labels.append(label)
+
+        if imagens:
+            self.recognizer.train(imagens, np.array(labels))
+        else:
+            print("⚠️ Nenhuma imagem encontrada para treinar o modelo.")
+
 
     def rodar_reconhecimento(self):
         try:
-            self.encerrar_janela = False  # Sinalizador
-
-            net = cv2.dnn.readNetFromCaffe(
-                "deploy.prototxt",
-                "res10_300x300_ssd_iter_140000.caffemodel"
-            )
-
-            source = cv2.VideoCapture(0)
-
-            if not source.isOpened():
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
                 self.lbl_status.config(text="❌ Erro ao acessar a câmera.")
                 return
 
-            in_width = 300
-            in_height = 300
-            mean = [104, 117, 123]
-            conf_threshold = 0.7
-            win_name = "Reconhecimento Facial"
+            face_cascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 
-            # Carregar rostos cadastrados
-            pasta_pessoas = "pessoas_cadastradas"
-            conhecidos = []
-            nomes_conhecidos = []
-
-            for caminho_imagem in glob.glob(os.path.join(pasta_pessoas, "*.jpg")):
-                imagem = face_recognition.load_image_file(caminho_imagem)
-                encs = face_recognition.face_encodings(imagem)
-                if encs:
-                    conhecidos.append(encs[0])
-                    nomes_conhecidos.append(os.path.splitext(os.path.basename(caminho_imagem))[0])
-
-            # Lista de nomes já registrados na sessão
             ja_registrados = []
 
             while True:
-                has_frame, frame = source.read()
-                if not has_frame:
+                ret, frame = cap.read()
+                if not ret:
                     break
 
                 frame = cv2.flip(frame, 1)
-                frame_height, frame_width = frame.shape[:2]
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-                # Detectar rostos
-                blob = cv2.dnn.blobFromImage(frame, 1.0, (in_width, in_height), mean, swapRB=False, crop=False)
-                net.setInput(blob)
-                detections = net.forward()
+                for (x, y, w, h) in faces:
+                    face_gray = gray[y:y+h, x:x+w]
 
-                face_locations = []
-                for i in range(detections.shape[2]):
-                    confidence = detections[0, 0, i, 2]
-                    if confidence > conf_threshold:
-                        x1 = int(detections[0, 0, i, 3] * frame_width)
-                        y1 = int(detections[0, 0, i, 4] * frame_height)
-                        x2 = int(detections[0, 0, i, 5] * frame_width)
-                        y2 = int(detections[0, 0, i, 6] * frame_height)
-                        face_locations.append((y1, x2, y2, x1))  # (top, right, bottom, left)
+                    label_pred, conf = self.recognizer.predict(face_gray)
+                    nome = self.label_map_invertido.get(label_pred, "Desconhecido")
 
-                if face_locations:
-                    encodings = face_recognition.face_encodings(frame, face_locations)
+                    if nome not in ja_registrados and conf < 70:
+                        ja_registrados.append(nome)
 
-                    for (top, right, bottom, left), encoding in zip(face_locations, encodings):
-                        distancias = face_recognition.face_distance(conhecidos, encoding)
-                        if len(distancias) == 0:
-                            continue
+                        from datetime import datetime
+                        import csv
 
-                        menor_dist = min(distancias)
-                        indice = distancias.tolist().index(menor_dist)
+                        agora = datetime.now()
+                        data_str = agora.strftime("%Y-%m-%d")
+                        hora_str = agora.strftime("%H:%M:%S")
 
-                        if menor_dist <= 0.5:
-                            nome = nomes_conhecidos[indice]
+                        registro_path = "registro_ponto.csv"
+                        cabecalho = ["Nome", "Data", "Hora"]
+                        existe = os.path.exists(registro_path)
 
-                            if nome not in ja_registrados:
-                                ja_registrados.append(nome)
+                        with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
+                            writer = csv.writer(file)
+                            if not existe:
+                                writer.writerow(cabecalho)
+                            writer.writerow([nome, data_str, hora_str])
 
-                                from datetime import datetime
-                                import csv
+                    if nome != "Desconhecido":
+                        print(f"Ponto registrado para {nome}")
+                            
+                        # Opcional: Mostra um popup com tkinter (fora da thread de vídeo)
+                        self.root.after(100, lambda: messagebox.showinfo("Sucesso", f"Ponto registrado para {nome}!"))
+                        return
 
-                                agora = datetime.now()
-                                data_str = agora.strftime("%Y-%m-%d")
-                                hora_str = agora.strftime("%H:%M:%S")
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                    cv2.putText(frame, nome, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                                registro_path = "registro_ponto.csv"
-                                cabecalho = ["Nome", "Data", "Hora"]
-                                existe = os.path.exists(registro_path)
+                cv2.imshow("Reconhecimento Facial", frame)
 
-                                with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
-                                    writer = csv.writer(file)
-                                    if not existe:
-                                        writer.writerow(cabecalho)
-                                    writer.writerow([nome, data_str, hora_str])
-
-                                self.lbl_status.config(text=f"✅ {nome} reconhecido! Ponto registrado.")
-                                self.encerrar_janela = True  # <-- Agora sim! Fecha depois
-                                break
-
-                        else:
-                            nome = "Desconhecido"
-
-                        # Desenha
-                        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                        cv2.putText(frame, nome, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-                cv2.imshow(win_name, frame)
-
-                # Saída automática
-                if self.encerrar_janela:
-                    cv2.waitKey(2000)  # Dá tempo de mostrar o texto na janela
+                # ESC fecha manualmente
+                if cv2.waitKey(1) & 0xFF == 27:
                     break
 
-                if cv2.getWindowProperty(win_name, cv2.WND_PROP_VISIBLE) < 1:
-                    break
-
-                if cv2.waitKey(1) == 27:
-                    break
-
-            source.release()
-            cv2.destroyAllWindows()
 
         except Exception as e:
             self.lbl_status.config(text=f"Erro: {e}")
+        
+        cap.release()
+        cv2.destroyAllWindows()
+
+
 
             
 # Criar janela
