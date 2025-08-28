@@ -8,7 +8,12 @@ import threading
 import numpy as np
 import sys
 import time
+import csv
+from datetime import datetime
+
+
 class FaceApp:
+
     def resource_path(relative_path):
         """ Get absolute path para o arquivo, independente se rodando do exe ou do script """
         try:
@@ -17,6 +22,7 @@ class FaceApp:
             base_path = os.path.abspath(".")
 
         return os.path.join(base_path, relative_path)
+
     def __init__(self, root):
         self.root = root
         self.root.title("Reconhecimento Facial - Batida de Ponto")
@@ -37,6 +43,47 @@ class FaceApp:
         self.lbl_status = tk.Label(root, text="Status: Aguardando ação...")
         self.lbl_status.pack(pady=10)
 
+    # --------------------------
+    # Utilitários de registro
+    # --------------------------
+    def ja_registrou(self, nome, data_str, registro_path="registro_ponto.csv"):
+        """Verifica se já existe registro do mesmo nome e data no CSV"""
+        if not os.path.exists(registro_path):
+            return False
+        with open(registro_path, newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            next(reader, None)  # pula cabeçalho
+            for row in reader:
+                if row[0] == nome and row[1] == data_str:
+                    return True
+        return False
+
+    def registrar_ponto(self, nome):
+        """Registra o ponto da pessoa, evitando duplicação"""
+        agora = datetime.now()
+        data_str = agora.strftime("%Y-%m-%d")
+        hora_str = agora.strftime("%H:%M:%S")
+
+        registro_path = "registro_ponto.csv"
+        cabecalho = ["Nome", "Data", "Hora"]
+        existe = os.path.exists(registro_path)
+
+        if not self.ja_registrou(nome, data_str, registro_path):
+            with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file)
+                if not existe:
+                    writer.writerow(cabecalho)
+                writer.writerow([nome, data_str, hora_str])
+
+            print(f"Ponto registrado para {nome}")
+            self.root.after(100, lambda: messagebox.showinfo("Sucesso", f"Ponto registrado para {nome}!"))
+        else:
+            print(f"{nome} já registrou ponto hoje.")
+            self.root.after(100, lambda: messagebox.showinfo("Aviso", f"{nome} já registrou ponto hoje."))
+
+    # --------------------------
+    # Lógica de interface
+    # --------------------------
     def iniciar_thread(self):
         self.lbl_status.config(text="🔍 Iniciando reconhecimento...")
         threading.Thread(target=self.rodar_reconhecimento).start()
@@ -56,14 +103,12 @@ class FaceApp:
                 face_locations = face_recognition.face_locations(rgb_frame)
 
                 for (top, right, bottom, left) in face_locations:
-                    # Adiciona margem
                     margem = 60
                     top = max(0, top - margem)
                     right = min(frame.shape[1], right + margem)
                     bottom = min(frame.shape[0], bottom + margem)
                     left = max(0, left - margem)
 
-                    # Retângulo de visualização
                     cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
 
                 cv2.imshow("Cadastro - Pressione S para salvar | Q para sair", frame)
@@ -79,6 +124,9 @@ class FaceApp:
                     caminho = os.path.join("pessoas_cadastradas", f"{nome}.jpg")
                     cv2.imwrite(caminho, face_image)
                     self.lbl_status.config(text=f"✅ {nome} cadastrado com sucesso!")
+
+                    # Re-treina modelo automaticamente
+                    self.treinar_modelo()
                     break
 
                 elif key == ord('q'):
@@ -88,7 +136,6 @@ class FaceApp:
             cap.release()
             cv2.destroyAllWindows()
 
-
         def pedir_nome():
             nome = entry_nome.get().strip()
             if nome:
@@ -97,7 +144,6 @@ class FaceApp:
             else:
                 messagebox.showwarning("Atenção", "Digite um nome válido.")
 
-        # Janela popup para digitar o nome
         cadastro_window = tk.Toplevel(self.root)
         cadastro_window.title("Cadastro de Pessoa")
 
@@ -105,7 +151,7 @@ class FaceApp:
         entry_nome = tk.Entry(cadastro_window)
         entry_nome.pack(pady=5)
         tk.Button(cadastro_window, text="Cadastrar", command=pedir_nome).pack(pady=5)
-    
+
     def treinar_modelo(self):
         imagens = []
         labels = []
@@ -115,7 +161,10 @@ class FaceApp:
             os.makedirs(pasta)
 
         arquivos = os.listdir(pasta)
-        nomes_unicos = list(set(nome.split("_")[0] for nome in arquivos if nome.endswith(".jpg")))
+        nomes_unicos = list(set(os.path.splitext(nome)[0] for nome in arquivos if nome.endswith(".jpg")))
+
+        self.label_map = {}
+        self.label_map_invertido = {}
 
         for idx, nome in enumerate(nomes_unicos):
             self.label_map[nome] = idx
@@ -125,7 +174,7 @@ class FaceApp:
             if arquivo.endswith(".jpg"):
                 caminho = os.path.join(pasta, arquivo)
                 img = cv2.imread(caminho, cv2.IMREAD_GRAYSCALE)
-                nome = arquivo.split("_")[0]
+                nome = os.path.splitext(arquivo)[0]  # remove .jpg do nome
                 label = self.label_map[nome]
                 imagens.append(img)
                 labels.append(label)
@@ -135,7 +184,6 @@ class FaceApp:
         else:
             print("⚠️ Nenhuma imagem encontrada para treinar o modelo.")
 
-
     def rodar_reconhecimento(self):
         try:
             cap = cv2.VideoCapture(0)
@@ -144,8 +192,6 @@ class FaceApp:
                 return
 
             face_cascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-
-            ja_registrados = []
 
             while True:
                 ret, frame = cap.read()
@@ -162,52 +208,33 @@ class FaceApp:
                     label_pred, conf = self.recognizer.predict(face_gray)
                     nome = self.label_map_invertido.get(label_pred, "Desconhecido")
 
-                    if nome not in ja_registrados and conf < 70:
-                        ja_registrados.append(nome)
+                    if conf < 70 and nome != "Desconhecido":
+                        self.registrar_ponto(nome)
+                        cap.release()
+                        time.sleep(2)
+                        cv2.destroyAllWindows()
+                        return  # <-- encerra o reconhecimento imediatamente
 
-                        from datetime import datetime
-                        import csv
-
-                        agora = datetime.now()
-                        data_str = agora.strftime("%Y-%m-%d")
-                        hora_str = agora.strftime("%H:%M:%S")
-
-                        registro_path = "registro_ponto.csv"
-                        cabecalho = ["Nome", "Data", "Hora"]
-                        existe = os.path.exists(registro_path)
-
-                        with open(registro_path, mode="a", newline="", encoding="utf-8") as file:
-                            writer = csv.writer(file)
-                            if not existe:
-                                writer.writerow(cabecalho)
-                            writer.writerow([nome, data_str, hora_str])
-
-                    if nome != "Desconhecido":
-                        print(f"Ponto registrado para {nome}")
-                            
-                        # Opcional: Mostra um popup com tkinter (fora da thread de vídeo)
-                        self.root.after(100, lambda: messagebox.showinfo("Sucesso", f"Ponto registrado para {nome}!"))
-                        return
+                    agora = datetime.now()
+                    hora_str = agora.strftime("%H:%M:%S")
 
                     cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                    cv2.putText(frame, nome, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.putText(frame, f"{nome} - {hora_str}", (x, y-10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
                 cv2.imshow("Reconhecimento Facial", frame)
 
-                # ESC fecha manualmente
-                if cv2.waitKey(1) & 0xFF == 27:
+                if cv2.waitKey(1) & 0xFF == 27:  # ESC para sair manualmente
                     break
-
 
         except Exception as e:
             self.lbl_status.config(text=f"Erro: {e}")
-        
+
         cap.release()
         cv2.destroyAllWindows()
 
 
 
-            
 # Criar janela
 root = tk.Tk()
 app = FaceApp(root)
