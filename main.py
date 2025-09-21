@@ -1,5 +1,4 @@
 import cv2
-import dlib
 import os
 import face_recognition
 import tkinter as tk
@@ -27,9 +26,8 @@ class FaceApp:
         self.root = root
         self.root.title("Reconhecimento Facial - Batida de Ponto")
 
-        self.recognizer = cv2.face.LBPHFaceRecognizer_create()
-        self.label_map = {}
-        self.label_map_invertido = {}
+        self.known_encodings = []
+        self.known_names = []
         self.treinar_modelo()
 
         # Botões
@@ -90,7 +88,7 @@ class FaceApp:
 
     def cadastrar_pessoa(self):
         def salvar_face(nome):
-            cap = cv2.VideoCapture(0)
+            cap = cv2.VideoCapture("teste.mp4")
             self.lbl_status.config(text="📷 Aguardando captura da webcam...")
 
             while True:
@@ -153,45 +151,35 @@ class FaceApp:
         tk.Button(cadastro_window, text="Cadastrar", command=pedir_nome).pack(pady=5)
 
     def treinar_modelo(self):
-        imagens = []
-        labels = []
+        self.known_encodings = []
+        self.known_names = []
         pasta = "pessoas_cadastradas"
 
         if not os.path.exists(pasta):
             os.makedirs(pasta)
 
         arquivos = os.listdir(pasta)
-        nomes_unicos = list(set(os.path.splitext(nome)[0] for nome in arquivos if nome.endswith(".jpg")))
-
-        self.label_map = {}
-        self.label_map_invertido = {}
-
-        for idx, nome in enumerate(nomes_unicos):
-            self.label_map[nome] = idx
-            self.label_map_invertido[idx] = nome
-
         for arquivo in arquivos:
             if arquivo.endswith(".jpg"):
                 caminho = os.path.join(pasta, arquivo)
-                img = cv2.imread(caminho, cv2.IMREAD_GRAYSCALE)
-                nome = os.path.splitext(arquivo)[0]  # remove .jpg do nome
-                label = self.label_map[nome]
-                imagens.append(img)
-                labels.append(label)
+                imagem = face_recognition.load_image_file(caminho)
+                encs = face_recognition.face_encodings(imagem)
+                if encs:
+                    self.known_encodings.append(encs[0])
+                    nome = os.path.splitext(arquivo)[0]
+                    self.known_names.append(nome)
 
-        if imagens:
-            self.recognizer.train(imagens, np.array(labels))
-        else:
-            print("⚠️ Nenhuma imagem encontrada para treinar o modelo.")
+        print(f"Treinamento concluído: {len(self.known_names)} pessoas cadastradas.")
 
     def rodar_reconhecimento(self):
         try:
-            cap = cv2.VideoCapture(0)
+            cap = cv2.VideoCapture("teste5.mp4")
             if not cap.isOpened():
                 self.lbl_status.config(text="❌ Erro ao acessar a câmera.")
                 return
 
-            face_cascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
+            tolerance = 0.45  # quanto menor, mais rígido
+            ja_registrados = []
 
             while True:
                 ret, frame = cap.read()
@@ -199,28 +187,31 @@ class FaceApp:
                     break
 
                 frame = cv2.flip(frame, 1)
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                face_locations = face_recognition.face_locations(rgb_frame)
+                encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
-                for (x, y, w, h) in faces:
-                    face_gray = gray[y:y+h, x:x+w]
+                for (top, right, bottom, left), face_encoding in zip(face_locations, encodings):
+                    distancias = face_recognition.face_distance(self.known_encodings, face_encoding)
+                    if len(distancias) > 0:
+                        min_idx = np.argmin(distancias)
+                        if distancias[min_idx] < tolerance:
+                            nome = self.known_names[min_idx]
+                        else:
+                            nome = "Desconhecido"
+                    else:
+                        nome = "Desconhecido"
 
-                    label_pred, conf = self.recognizer.predict(face_gray)
-                    nome = self.label_map_invertido.get(label_pred, "Desconhecido")
-
-                    if conf < 70 and nome != "Desconhecido":
+                    if nome != "Desconhecido" and nome not in ja_registrados:
+                        ja_registrados.append(nome)
                         self.registrar_ponto(nome)
                         cap.release()
                         time.sleep(2)
                         cv2.destroyAllWindows()
-                        return  # <-- encerra o reconhecimento imediatamente
+                        return
 
-                    agora = datetime.now()
-                    hora_str = agora.strftime("%H:%M:%S")
-
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{nome} - {hora_str}", (x, y-10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                    cv2.putText(frame, nome, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
                 cv2.imshow("Reconhecimento Facial", frame)
 
@@ -232,7 +223,6 @@ class FaceApp:
 
         cap.release()
         cv2.destroyAllWindows()
-
 
 
 # Criar janela
